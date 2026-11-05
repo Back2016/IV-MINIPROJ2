@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+test-results/
+playwright-report/
+__pycache__/
+*.log
+.DS_Store
+.env
+.env.*
+docs/screenshots/
+docs/*test*.json
+docs/ui-test-results.json
