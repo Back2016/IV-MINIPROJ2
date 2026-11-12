@@ -23,3 +23,5 @@ OpenAI Codex assisted with the implementation plan, visualization and interactio
 
 No peer observations, user quotations, successful macOS tests or signed releases are fabricated. Dependency licenses remain with their respective packages; Electron includes its bundled Chromium license notices.
 
+
+Geographic state outlines: [U.S. Atlas 3.0.1](https://github.com/topojson/us-atlas), based on 2017 U.S. Census Bureau cartographic state boundaries. The included GeoJSON was generated from `states-10m.json` using `scripts/prepare_boundaries.py` and contains only the 48 states in the dashboard data.

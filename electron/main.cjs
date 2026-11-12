@@ -6,14 +6,13 @@ else {
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
     function createWindow() {
+      const isTest = process.argv.some((arg) => arg === "--smoke-test" || arg === "--test-window");
       const win = new BrowserWindow({
         width: 1440,
         height: 1000,
-        minWidth: 800,
-        minHeight: 640,
-        show:
-          !process.argv.includes("--smoke-test") &&
-          !process.argv.includes("--test-window"),
+        minWidth: 1000,
+        minHeight: 660,
+        show: false,
         backgroundColor: "#f4f6f8",
         webPreferences: {
           nodeIntegration: false,
@@ -23,6 +22,10 @@ else {
       });
       win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       win.webContents.on("will-navigate", (event) => event.preventDefault());
+      if (!isTest) win.once("ready-to-show", () => {
+        win.maximize();
+        win.show();
+      });
       win.loadFile(path.join(__dirname, "../dist/index.html"));
       // Exercise the packaged renderer without opening a window during build QA.
       if (process.argv.includes("--smoke-test")) {

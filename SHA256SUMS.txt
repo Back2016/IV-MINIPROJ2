@@ -1,1 +1,1 @@
-c5d8baa1cab7c7c17c0904818f62cd58689886e4b0034f0d483d24a61ce0a068  ENSO.Weather.Explorer-0.1.3-arm64.dmg
+2d30c8108fba2dec8b4d3700f81c1de2a0e8ec7c75e576097f5989f9abaf04c7  ENSO.Weather.Explorer-0.1.5-arm64.dmg

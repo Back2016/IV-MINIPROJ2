@@ -9,7 +9,7 @@ async function main() {
   const result = { executablePath, offline: false, errors: [], externalRequests: [], checks: [] };
   try {
     result.version = await app.evaluate(({ app }) => app.getVersion());
-    if (result.version !== '0.1.3') throw Error('Wrong installed app version');
+    if (result.version !== require('../package.json').version) throw Error('Wrong installed app version');
     const page = await app.firstWindow();
     page.on('pageerror', e => result.errors.push(e.message));
     page.on('request', r => { if (/^https?:/.test(r.url())) result.externalRequests.push(r.url()); });
@@ -17,6 +17,12 @@ async function main() {
     await page.reload();
     await expect(page.locator('main')).toHaveAttribute('data-count', '2112');
     await expect(page.locator('#map svg')).toHaveAttribute('data-color-limit', '20');
+    await page.getByLabel('Map style').selectOption('geographic');
+    await expect(page.locator('#map path.state-shape')).toHaveCount(48);
+    await expect(page.locator('#record-search')).toBeVisible();
+    if (await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)) throw Error('Dashboard requires page scroll');
+    await page.getByLabel('Map style').selectOption('tiles');
+    result.checks.push('Offline geographic boundaries, inline record search and viewport fit');
     result.offline = true; result.checks.push('Offline launch: 2112 observed records');
     await page.locator('#tile-CA').click();
     await expect(page.locator('#scatter [data-selected="true"]')).toHaveCount(44);
@@ -26,6 +32,7 @@ async function main() {
     const groupCount = Number(await page.locator('main').getAttribute('data-count'));
     await expect(page.locator('#scatter [data-selected="true"]')).toHaveCount(groupCount);
     result.checks.push(`Group selection: ${groupCount} linked records`);
+    await page.getByRole('button', {name:'Set exact bounds'}).click();
     await page.getByRole('button', {name:'Select range', exact:true}).click();
     const brushCount = Number(await page.locator('main').getAttribute('data-count'));
     if (brushCount <= 0 || brushCount >= 2112) throw Error('Invalid numeric selection');
@@ -39,7 +46,6 @@ async function main() {
     await expect(page.locator('#metric')).toHaveValue('precip');
     result.checks.push('Metric change clears selection; Reset restores precipitation');
     await expect(page.locator('#map-coverage')).toContainText('44 distinct winters');
-    await page.locator('.records-panel summary').click();
     await page.locator('#record-search').fill('california 1998');
     await page.getByRole('checkbox', {name:'Check California winter 1998', exact:true}).check();
     await page.locator('#apply-records').click();
@@ -50,9 +56,9 @@ async function main() {
     await expect(page.locator('#map-coverage')).toContainText('1 distinct winter · 1998');
     result.checks.push('Search and checkbox selection update all views and map explanation');
     await page.locator('#reset').click();
-    await page.locator('.records-panel summary').click();
     await page.locator('#tile-CA').click();
     await page.locator('#metric').selectOption('temp');
+    await page.getByRole('button', {name:'Set exact bounds'}).click();
     for (const [id, value] of Object.entries({x0:'0',x1:'3',y0:'0',y1:'6'})) await page.locator('#'+id).fill(value);
     await page.locator('#brush-form button').click();
     await expect(page.locator('main')).toHaveAttribute('data-count','8');

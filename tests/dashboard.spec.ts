@@ -49,7 +49,7 @@ test("state colors use fixed mean-scale limits and mark uncapped extremes", asyn
     "data-color-limit",
     "2",
   );
-  await expect(page.locator("#color-key")).toContainText("−2 to +2°C");
+  await expect(page.locator("#color-key")).toContainText("≤ -2°C");
   await page.locator("#reset").click();
   await expect(page.locator("#map svg")).toHaveAttribute(
     "data-color-limit",
@@ -95,7 +95,6 @@ test("record search, paging and draft multi-selection propagate to all views", a
   page,
 }) => {
   await page.goto("/");
-  await page.locator(".records-panel summary").click();
   await page.locator("#record-search").fill("california 1998");
   await expect(page.locator("#record-results")).toContainText("1 matches");
   await page
@@ -200,6 +199,7 @@ test("peer regression: state context survives numeric selection, repeated draggi
   await page.locator("#tile-CA").click();
   await expect(page.locator("#state")).toHaveValue("CA");
   await page.locator("#metric").selectOption("temp");
+  await page.getByRole("button", { name: "Set exact bounds" }).click();
   await expect(page.locator("#x0")).toBeVisible();
   for (const [id, value] of Object.entries({x0: "0", x1: "3", y0: "0", y1: "6"}))
     await page.locator(`#${id}`).fill(value);
@@ -267,6 +267,7 @@ test("peer regression: visible cohort means and metric labels follow group, stat
   }
   await page.locator("#tile-CA").click();
   await expect(page.locator("#mean-scope")).toContainText("1 state · 44 records");
+  await page.getByRole("button", { name: "Set exact bounds" }).click();
   await page.locator("#x0").fill("9");
   await page.locator("#x1").fill("10");
   await page.locator("#brush-form button").click();
@@ -305,6 +306,7 @@ test("all three views drive linked selection; keyboard, clear, filters and reset
     path: "docs/screenshots/02-group-selection.png",
     fullPage: true,
   });
+  await page.getByRole("button", { name: "Set exact bounds" }).click();
   await page.getByRole("button", { name: "Select range", exact: true }).click();
   await checkLinked(
     page,
@@ -347,6 +349,7 @@ test("mouse brushing, empty cohort and fixed axes", async ({ page }) => {
   expect(n).toBeLessThan(2112);
   await checkLinked(page, n);
   const ticks = await page.locator("#scatter .tick text").allTextContents();
+  await page.getByRole("button", { name: "Set exact bounds" }).click();
   await page.locator("#x0").fill("9");
   await page.locator("#x1").fill("10");
   await page.getByRole("button", { name: "Select range", exact: true }).click();
@@ -401,4 +404,83 @@ test("color-vision snapshots and responsive layout", async ({ page }) => {
     path: "docs/screenshots/05-narrow-layout.png",
     fullPage: true,
   });
+});
+
+
+test("pop-outs keep supporting information off the dashboard and restore keyboard focus", async ({ page }) => {
+  await page.goto("/");
+  for (const [button, title] of [
+    ["Map details", "Read the state map"],
+    ["Plot guide", "Read the scatterplot"],
+    ["Chart details", "Read the ENSO comparison"],
+    ["Set exact bounds", "Set exact bounds"],
+    ["Data & methods", "Data, methods & interpretation"],
+  ]) {
+    const trigger = page.getByRole("button", { name: button, exact: true });
+    const dialog = page.getByRole("dialog", { name: title, exact: true });
+    await expect(dialog).toBeHidden();
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(trigger).toBeFocused();
+  }
+  await page.getByRole("button", { name: "Set exact bounds" }).click();
+  await page.locator("#x0").fill("3");
+  await page.getByRole("button", { name: "Select range" }).click();
+  await expect(page.locator("#bounds-error")).toBeVisible();
+  await checkLinked(page, 2112);
+  await page.locator("#brush-details").getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.locator("#brush-details")).toBeHidden();
+  await expect(page.locator("#scatter .axis-title").first()).toHaveCSS("font-size", "16px");
+  await expect(page.locator("#comparison .chart-axis .tick text").first()).toHaveCSS("font-size", "14px");
+});
+
+
+test("desktop layout fits the window and geographic mode shares linked state summaries", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 660 });
+  await page.goto("/");
+  await expect(page.locator(".badge")).toHaveText("v0.1.5");
+  const geometry = await page.evaluate(() => {
+    const rect = (id: string) => document.querySelector(id)!.getBoundingClientRect().toJSON();
+    return {
+      scrollHeight: document.documentElement.scrollHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      map: rect(".map-panel"),
+      table: rect(".records-panel"),
+      scroll: rect("#record-scroll"),
+      scatter: rect(".scatter-panel"),
+      comparison: rect(".comparison-panel"),
+    };
+  });
+  expect(geometry.scrollHeight).toBeLessThanOrEqual(660);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(1000);
+  expect(geometry.table.y).toBeGreaterThan(geometry.map.bottom);
+  expect(geometry.table.x).toBe(geometry.map.x);
+  expect(geometry.scroll.height).toBeGreaterThan(60);
+  expect(geometry.scatter.y).toBe(geometry.map.y);
+  expect(geometry.comparison.bottom).toBeLessThanOrEqual(660);
+  await expect(page.locator("#record-search")).toBeVisible();
+  await page.locator("#record-search").fill("California 1998");
+  await expect(page.locator("#record-results")).toContainText("1 matches");
+  await page.locator("#record-table button").click();
+  await checkLinked(page, 1);
+  const fill = await page.locator("#tile-CA rect").getAttribute("fill");
+  await page.getByLabel("Map style").selectOption("geographic");
+  await expect(page.locator('#map svg[data-map-style="geographic"] path.state-shape')).toHaveCount(48);
+  await expect(page.locator("#tile-CA path")).toHaveAttribute("fill", fill!);
+  await expect(page.locator("#tile-CA path")).toHaveAttribute("d", /^M/);
+  await checkLinked(page, 1);
+  await page.locator("#tile-CA").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#state")).toHaveValue("CA");
+  await checkLinked(page, 44);
+  await page.getByLabel("Map style").selectOption("tiles");
+  await expect(page.locator('#map svg[data-map-style="tiles"] rect.state-shape')).toHaveCount(48);
+  await checkLinked(page, 44);
+  await page.locator("#reset").click();
+  await page.getByLabel("Map style").selectOption("geographic");
+  await page.screenshot({ path: "docs/screenshots/desktop-geographic.png" });
 });

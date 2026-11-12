@@ -1,5 +1,8 @@
 import * as d3 from "d3";
 import dataset from "./data.json";
+import stateBoundaries from "./state-boundaries.json";
+import type { FeatureCollection, MultiPolygon, Polygon } from "geojson";
+import { version } from "../package.json";
 import {
   bands,
   defaults,
@@ -16,6 +19,14 @@ import {
 import "./style.css";
 
 const records: RecordRow[] = dataset.records;
+// Keep comparison rows stable across filters, omitting groups absent from the dataset.
+const comparisonRows = bands.flatMap((_, band) =>
+  phases.flatMap((phase, phaseIndex) =>
+    records.some((record) => record.band === band && record.phase === phase)
+      ? [{ band, phase, phaseIndex }]
+      : [],
+  ),
+).sort((a, b) => b.band - a.band);
 // Fixed display limits for state means, independent of individual-observation axes.
 // Values outside these limits retain their numeric value and receive an asterisk.
 const mapColorLimits: Record<Metric, number> = { precip: 20, temp: 2 };
@@ -32,6 +43,9 @@ const shapes: Record<string, d3.SymbolType> = {
 };
 let filters: Filters = { ...defaults };
 let metric: Metric = "precip";
+let mapStyle: "tiles" | "geographic" = "tiles";
+const boundaries = stateBoundaries as FeatureCollection<Polygon | MultiPolygon>;
+const boundariesByCode = new Map(boundaries.features.map((feature) => [feature.id, feature]));
 let selection: Selection = null;
 // Record browsing is a draft: search/checking never changes charts until Apply.
 let recordPage = 0;
@@ -54,8 +68,16 @@ const metricName = () =>
 const options = (items: string[]) =>
   items.map((s) => `<option>${s}</option>`).join("");
 
+const popout = (id: string, title: string, content: string) => `
+ <dialog id="${id}" class="popout" aria-labelledby="${id}-title">
+  <div class="popout-header"><h2 id="${id}-title">${title}</h2><form method="dialog"><button class="secondary" autofocus>Close</button></form></div>
+  <div class="popout-body">${content}</div>
+ </dialog>`;
+const popoutButton = (id: string, text: string) =>
+  `<button class="secondary" data-popout="${id}" aria-haspopup="dialog" aria-controls="${id}">${text}</button>`;
+
 $("app").innerHTML = `
-<header><div><div class="eyebrow">MINIPROJ2 · INFORMATION VISUALIZATION</div><h1>El Niño & U.S. winter weather</h1><p>Explore how winter conditions vary across states and ENSO phases.</p></div><span class="badge">v0.1.3 · NOAA OBSERVATIONS · OFFLINE</span></header>
+<header><h1>El Niño & U.S. winter weather</h1><span class="badge">v${version}</span></header>
 <main data-ready="true">
  <section class="controls" aria-label="Dashboard filters">
   <label>Weather metric<select id="metric"><option value="precip">Precipitation anomaly (%)</option><option value="temp">Temperature anomaly (°C)</option></select></label>
@@ -67,26 +89,61 @@ $("app").innerHTML = `
   <button id="reset" class="secondary">Reset all</button>
  </section>
  <div id="error" role="alert"></div>
- <section class="metric-status" aria-label="Active metric and filters" aria-live="polite"><strong id="active-metric"></strong><span id="active-filters"></span></section>
- <section class="summary-bar"><div><span class="eyebrow">CURRENT COHORT</span><strong id="cohort"></strong></div><p id="selection-label" aria-live="polite"></p><button id="clear" class="secondary">Clear selection</button></section>
- <div class="scope-controls"><span id="state-context"></span><button id="all-states" class="secondary">Show all states</button><span class="chart-note">Clear selection keeps filters and metric. Reset all restores all states, all phases and precipitation.</span></div>
- <p id="empty" class="empty" hidden>No matching records. Change the filters or clear the selection.</p>
- <section class="dashboard" aria-label="Three coordinated views">
-  <article class="panel map-panel"><div class="panel-heading"><span class="view-letter">A</span><div><h2 id="map-title">State overview</h2><p>Click a tile to set the state filter for all views.</p></div></div><section class="map-context" aria-label="What these values mean"><h3>Current cohort average</h3><strong id="map-mean" aria-live="polite"></strong><p id="mean-scope"></p><p id="map-explanation"></p><p id="map-coverage" aria-live="polite"></p><p id="map-phases"></p><p id="map-baseline"></p><p>Winter = December–February, labeled by the ending year. Filters and chart selections update these averages.</p></section><div id="map"></div><div id="color-key"></div><p class="chart-note">Equal-size tiles use approximate geography. Dashed tiles have no selected records; click an available tile to switch states.</p><div class="legend-block"><h3>Phase · color + fill</h3><div id="phase-legend" class="legend"></div><h3>Region · shape</h3><div id="region-legend" class="legend"></div></div><p class="chart-note">Reference: winters ending 1991–2020. Winter 1998 means Dec 1997–Feb 1998.</p></article>
-  <article class="panel scatter-panel"><div class="panel-heading"><span class="view-letter">B</span><div><h2 id="scatter-title">ENSO and precipitation</h2><p>Drag a rectangle to select observations. Hover for details.</p></div></div><div id="scatter"></div>
-   <section id="brush-details" class="exact-bounds" aria-label="Exact selection bounds"><h3>Set exact bounds</h3><p id="brush-scope" class="chart-note"></p><form id="brush-form"><div class="bounds"><label>ONI min (°C)<input id="x0" type="number" step="any" value="1"></label><label>ONI max (°C)<input id="x1" type="number" step="any" value="2.5"></label><label id="y0-label">Anomaly minimum<input id="y0" type="number" step="any" value="0"></label><label id="y1-label">Anomaly maximum<input id="y1" type="number" step="any" value="70"></label></div><button type="submit">Select range</button></form></section>
-  </article>
-  <article class="panel comparison-panel"><div class="panel-heading"><span class="view-letter">C</span><div><h2 id="comparison-title">Anomaly by ENSO magnitude</h2><p>Click a phase row. Dot = mean; line = middle 50%, not uncertainty.</p></div></div><section class="comparison-summary"><strong id="comparison-mean" aria-live="polite"></strong><p id="comparison-scope" class="chart-note"></p></section><div id="comparison"></div></article>
+ <section class="summary-bar" aria-label="Current selection">
+  <div class="summary-text"><strong id="cohort"></strong><span id="active-metric"></span></div>
+  <div class="selection-context"><span id="state-context"></span><span id="selection-label" aria-live="polite"></span></div>
+  <button id="clear" class="secondary">Clear selection</button><button id="all-states" class="secondary">Show all states</button>
+  ${popoutButton("methods-dialog", "Data & methods")}
  </section>
- <details class="panel records-panel"><summary>Find & select observations <span id="table-count"></span></summary>
- <p>Search by state name/code, winter, region or phase (for example, “California 1998” or “West El Nino”). Check records across searches and pages, then apply to all charts. Click a state/winter button to select just that record.</p>
- <div class="record-controls"><label class="record-search-label">Find records<input id="record-search" type="search" placeholder="State, winter, region or phase…"></label><label>Browse<select id="record-scope"><option value="available">All available records</option><option value="selected">Current chart selection</option></select></label><label>Sort by<select id="record-sort"><option value="newest">Newest winter</option><option value="oldest">Oldest winter</option><option value="state">State (A–Z)</option><option value="high">Highest active anomaly</option><option value="low">Lowest active anomaly</option><option value="extreme">Largest absolute anomaly</option></select></label></div>
- <div class="record-actions"><button id="check-matches" class="secondary">Check all matches</button><button id="uncheck-records" class="secondary">Uncheck all</button><button id="apply-records">Apply checked to charts</button><span id="record-draft" role="status"></span></div>
+ <p id="empty" class="empty" hidden>No matching records. Change the filters or clear the selection.</p>
+ <section class="dashboard" aria-label="Linked weather charts and records">
+  <article class="panel map-panel">
+   <div class="panel-heading"><span class="view-letter">A</span><div><h2 id="map-title">State overview</h2><p>Click a state to filter all charts.</p></div><label class="map-style"><span>Map style</span><select id="map-style"><option value="tiles">Tile map</option><option value="geographic">Geographic map</option></select></label>${popoutButton("map-dialog", "Map details")}</div>
+   <div id="map"></div><div id="color-key"></div>
+  </article>
+  <article class="panel scatter-panel">
+   <div class="panel-heading"><span class="view-letter">B</span><div><h2 id="scatter-title">ENSO and precipitation</h2><p>Drag to select observations.</p></div><div class="panel-actions">${popoutButton("scatter-dialog", "Plot guide")}${popoutButton("brush-details", "Set exact bounds")}</div></div>
+   <div id="scatter"></div>
+  </article>
+  <article class="panel comparison-panel">
+   <div class="panel-heading"><span class="view-letter">C</span><div><h2 id="comparison-title">Anomaly by ENSO magnitude</h2><p>Click a row to select a group.</p></div>${popoutButton("comparison-dialog", "Chart details")}</div>
+   <p id="comparison-mean" class="cohort-mean" aria-live="polite"></p><div id="comparison"></div>
+  </article>
+  <article class="panel records-panel" aria-labelledby="records-title">
+   <div class="panel-heading"><span class="view-letter">D</span><h2 id="records-title">Find observations</h2></div>
+ <div class="record-controls"><label class="record-search-label">Find records<input id="record-search" type="search" placeholder="State, winter, region or phase…"></label><label>Browse<select id="record-scope"><option value="available">Available</option><option value="selected">Chart selection</option></select></label><label>Sort by<select id="record-sort"><option value="newest">Newest winter</option><option value="oldest">Oldest winter</option><option value="state">State (A–Z)</option><option value="high">Highest active anomaly</option><option value="low">Lowest active anomaly</option><option value="extreme">Largest anomaly</option></select></label></div>
+ <div class="record-actions"><button id="check-matches" class="secondary">Check all matches</button><button id="uncheck-records" class="secondary">Uncheck all</button><button id="apply-records">Apply to charts</button><span id="record-draft" role="status"></span></div>
+ <div id="record-scroll" class="table-scroll" tabindex="0" aria-label="Observation results"><table><thead><tr><th>Check</th><th>State / winter</th><th>Region</th><th>ONI °C</th><th>Phase</th><th>Precip. %</th><th>Temp. °C</th><th>In charts</th></tr></thead><tbody id="record-table"></tbody></table></div>
  <div class="record-pagination"><p id="record-results" role="status"></p><button id="record-prev" class="secondary">Previous</button><button id="record-next" class="secondary">Next</button></div>
- <div class="table-scroll"><table><thead><tr><th>Check</th><th>State / winter</th><th>Region</th><th>ONI °C</th><th>Phase</th><th>Precip. %</th><th>Temp. °C</th><th>In charts</th></tr></thead><tbody id="record-table"></tbody></table></div></details>
- <details class="panel methods"><summary>Data, methods & interpretation</summary><p>Historical NOAA ONI joined to statewide nClimDiv records: 48 contiguous states, winters ending 1982–2025. ONI episode labels use at least five consecutive overlapping seasons at ±0.5 °C after rounding to one decimal; this app uses historical ONI, not RONI.</p><p>Precipitation: sum of December, January and February, expressed as a percentage departure from the state's 1991–2020 winter mean. Temperature: day-weighted monthly average, expressed in °C relative to the same winter baseline. Missing values are excluded only for the active metric. Filters do not change the baseline or axis domains.</p><p>Each state–winter has equal weight. Multiple states share an ENSO winter, so record counts are not independent event counts. The charts describe associations, not causation or forecasts. Other climate influences, warming trends and within-state variation remain relevant.</p><p>Snapshot: ${dataset.metadata.release}; retrieved ${dataset.metadata.retrieved}. Missing precipitation records: ${dataset.metadata.missing.precip}; temperature: ${dataset.metadata.missing.temp}. Full URLs, hashes and processing code are included with the source.</p><p class="source-url">NOAA CPC: https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/oni/v5/<br>NOAA NCEI: https://www.ncei.noaa.gov/monitoring-content/data/us/climdiv/monthly/current/</p><p>Built with D3.js and Electron. AI assisted the code, design and documentation; see ACKNOWLEDGMENTS.md in the source package.</p></details>
- <footer>MINIPROJ2 / WORKING PROTOTYPE <span>Fixed scales · Linked views · 1982–2025</span></footer>
-</main><div id="tooltip" role="tooltip" hidden></div>`;
+  </article>
+ </section>
+</main>
+${popout("map-dialog", "Read the state map", `
+ <strong id="map-mean" aria-live="polite"></strong>
+ <p id="mean-scope"></p><p id="map-explanation"></p><p id="map-coverage"></p><p id="map-phases"></p><p id="map-baseline"></p>
+ <p>Winter = December–February, labeled by the ending year. Winter 1998 means December 1997–February 1998.</p>
+ <p>Dashed outlines have no selected records. Both map styles use the same color scale. Tile values marked * exceed the color scale. Hover over or focus a state for its exact value. Geographic boundaries come from the U.S. Census Bureau via U.S. Atlas.</p>`)}
+${popout("scatter-dialog", "Read the scatterplot", `
+ <p>Each point is one state in one winter. DJF ONI is the December–February Oceanic Niño Index, a measure of tropical Pacific sea surface temperature anomaly.</p>
+ <p>Drag a rectangle or use <strong>Set exact bounds</strong> to select points. Hover to see an observation's details.</p>
+ <div class="legend-block"><h3>ENSO phase · color and fill</h3><div id="phase-legend" class="legend"></div><h3>Region · shape</h3><div id="region-legend" class="legend"></div></div>`)}
+${popout("comparison-dialog", "Read the ENSO comparison", `
+ <p id="comparison-scope"></p>
+ <p>Each row groups records by ENSO phase and absolute ONI (strength). The dot is the mean; the line spans the middle 50% of records. The numbers at right are records / distinct winters.</p>
+ <p>Light gray marks show the group before the current chart selection, with filters still applied. They overlap the colored marks when the groups are identical.</p>`)}
+${popout("brush-details", "Set exact bounds", `
+ <p id="brush-scope"></p>
+ <form id="brush-form"><div class="bounds"><label>ONI min (°C)<input id="x0" type="number" step="any" value="1"></label><label>ONI max (°C)<input id="x1" type="number" step="any" value="2.5"></label><label id="y0-label">Anomaly minimum<input id="y0" type="number" step="any" value="0"></label><label id="y1-label">Anomaly maximum<input id="y1" type="number" step="any" value="70"></label></div><p id="bounds-error" role="alert"></p><button type="submit">Select range</button></form>`)}
+${popout("methods-dialog", "Data, methods & interpretation", `<p>Historical NOAA ONI joined to statewide nClimDiv records: 48 contiguous states, winters ending 1982–2025. ONI episode labels use at least five consecutive overlapping seasons at ±0.5 °C after rounding to one decimal; this app uses historical ONI, not RONI.</p><p>Precipitation: sum of December, January and February, expressed as a percentage departure from the state's 1991–2020 winter mean. Temperature: day-weighted monthly average, expressed in °C relative to the same winter baseline. Missing values are excluded only for the active metric. Filters do not change the baseline or axis domains.</p><p>Each state–winter has equal weight. Multiple states share an ENSO winter, so record counts are not independent event counts. The charts describe associations, not causation or forecasts. Other climate influences, warming trends and within-state variation remain relevant.</p><p>Snapshot: ${dataset.metadata.release}; retrieved ${dataset.metadata.retrieved}. Missing precipitation records: ${dataset.metadata.missing.precip}; temperature: ${dataset.metadata.missing.temp}. Full URLs, hashes and processing code are included with the source.</p><p class="source-url">NOAA CPC: https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/oni/v5/<br>NOAA NCEI: https://www.ncei.noaa.gov/monitoring-content/data/us/climdiv/monthly/current/</p><p>Built with D3.js and Electron. AI assisted the code, design and documentation; see ACKNOWLEDGMENTS.md in the source package.</p>`)}
+<div id="tooltip" role="tooltip" hidden></div>`;
+
+document.querySelectorAll<HTMLButtonElement>("[data-popout]").forEach((button) => {
+  button.addEventListener("click", () => {
+    hideTip();
+    $("bounds-error").textContent = "";
+    $<HTMLDialogElement>(button.dataset.popout!).showModal();
+  });
+});
 
 function showTip(event: MouseEvent | FocusEvent, text: string) {
   const tip = $("tooltip");
@@ -124,10 +181,11 @@ function keyboardClick(event: KeyboardEvent, callback: () => void) {
     callback();
   }
 }
-function svgRoot(id: string, height: number) {
+function svgRoot(id: string) {
   const container = $(id);
   container.replaceChildren();
-  const width = Math.max(320, container.clientWidth);
+  const width = Math.max(1, container.clientWidth);
+  const height = Math.max(1, container.clientHeight);
   return {
     width,
     height,
@@ -138,9 +196,9 @@ function svgRoot(id: string, height: number) {
       .attr(
         "aria-label",
         id === "map"
-          ? "State mean anomaly tile map"
+          ? mapStyle === "tiles" ? "State mean anomaly tile map" : "Geographic state mean anomaly map"
           : id === "scatter"
-            ? "ONI versus weather anomaly; numeric selection available below"
+            ? "ONI versus weather anomaly; use Set exact bounds for numeric selection"
             : "Phase and ONI magnitude summaries",
       ),
   };
@@ -158,10 +216,10 @@ function describeMap() {
     .map((s) => focused.filter((r) => r.state === s.code).length)
     .filter(Boolean);
   $("map-explanation").textContent =
-    `Each tile is the average winter ${metricName().toLowerCase()} anomaly for that state's selected records (${unit()}). Each winter has equal weight within a state.`;
+    `Each state’s color shows its average winter ${metricName().toLowerCase()} anomaly across the selected records (${unit()}). Each winter has equal weight within a state.`;
   $("map-coverage").textContent = winters.length
     ? `${winters.length} distinct winter${winters.length === 1 ? "" : "s"} · ${winters[0]}${winters.length > 1 ? `–${winters.at(-1)}` : ""} · ${counts.length} state${counts.length === 1 ? "" : "s"} · ${Math.min(...counts)}${Math.min(...counts) !== Math.max(...counts) ? `–${Math.max(...counts)}` : ""} winter(s) per shown state. ${winters.length !== winters.at(-1)! - winters[0] + 1 ? "Some years in this span are not selected." : ""}`
-    : "No selected records. Tiles have no average to display.";
+    : "No selected records. States have no average to display.";
   $("map-phases").textContent =
     "Included phases: " +
     (phases.filter((p) => focused.some((r) => r.phase === p)).join(", ") ||
@@ -173,7 +231,7 @@ function describeMap() {
       : "Baseline: each state's 1991–2020 winter average. −1°C means 1°C cooler; +1°C means 1°C warmer.";
   const s = summary(focused, metric);
   $("map-mean").textContent = `Mean ${metricName().toLowerCase()} anomaly: ${fmt(s.mean)} ${unit()}`;
-  $("mean-scope").textContent = `Current cohort across ${counts.length} state${counts.length === 1 ? "" : "s"} · ${s.n.toLocaleString()} records · ${s.winters} distinct winters. Each state–winter record has equal weight. Tiles below show each state's own mean.`;
+  $("mean-scope").textContent = `Current cohort across ${counts.length} state${counts.length === 1 ? "" : "s"} · ${s.n.toLocaleString()} records · ${s.winters} distinct winters. Each state–winter record has equal weight. The map shows each state's own mean.`;
 }
 
 function matchingRecords() {
@@ -224,7 +282,7 @@ function matchingRecords() {
 
 function updateDraftCount() {
   $("record-draft").textContent =
-    `${checkedRecords.size.toLocaleString()} checked (including other pages/searches). Charts update when you apply.`;
+    `${checkedRecords.size.toLocaleString()} checked`;
   $<HTMLButtonElement>("apply-records").disabled = checkedRecords.size === 0;
   $<HTMLButtonElement>("uncheck-records").disabled = checkedRecords.size === 0;
 }
@@ -235,8 +293,6 @@ function drawRecords() {
   recordPage = Math.min(recordPage, pages - 1);
   const start = recordPage * pageSize;
   const activeIds = new Set(focused.map((r) => r.id));
-  $("table-count").textContent =
-    `(${focused.length.toLocaleString()} in charts / ${available.length.toLocaleString()} available)`;
   $("record-results").textContent =
     `${matches.length.toLocaleString()} matches · ${matches.length ? start + 1 : 0}–${Math.min(start + pageSize, matches.length)} shown · page ${recordPage + 1} of ${pages}`;
   $<HTMLButtonElement>("record-prev").disabled = recordPage === 0;
@@ -272,9 +328,15 @@ function drawRecords() {
 
 // Keep all available tiles selectable even when another state is selected.
 function drawMap() {
-  const { svg, width } = svgRoot("map", 365);
-  const size = Math.min((width - 20) / 12, 45),
-    origin = (width - size * 12) / 2;
+  const { svg, width, height } = svgRoot("map");
+  const tileRows = d3.max(dataset.states, (s) => s.tile[1])! + 1;
+  const size = Math.min((width - 8) / 12, (height - 8) / tileRows, 56);
+  const originX = (width - size * 12) / 2;
+  const originY = (height - size * tileRows) / 2;
+  const path = mapStyle === "geographic"
+    ? d3.geoPath(d3.geoAlbers().fitExtent([[6, 5], [width - 6, height - 5]], boundaries))
+    : null;
+  svg.attr("data-map-style", mapStyle);
   const lim = mapColorLimits[metric];
   svg.attr("data-color-limit", lim);
   const color = d3
@@ -294,11 +356,11 @@ function drawMap() {
       (clipped
         ? `; color capped at ${s.mean! < 0 ? -lim : lim} ${unit()}; numeric value is not capped`
         : "");
-    const x = origin + state.tile[0] * size,
-      y = state.tile[1] * size + 8;
+    const x = originX + state.tile[0] * size,
+      y = originY + state.tile[1] * size;
     const tile = svg
       .append("g")
-      .attr("transform", `translate(${x},${y})`)
+      .attr("transform", path ? null : `translate(${x},${y})`)
       .attr("role", "button")
       .attr("tabindex", enabled ? 0 : -1)
       .attr("id", `tile-${state.code}`)
@@ -335,30 +397,35 @@ function drawMap() {
       (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05)
         ? "#000000"
         : "#ffffff";
-    tile
-      .append("rect")
-      .attr("width", size - 3)
-      .attr("height", size - 3)
-      .attr("rx", 3)
+    const feature = boundariesByCode.get(state.code)!;
+    const shape = tile.append<SVGElement>(path ? "path" : "rect");
+    if (path) shape.attr("d", path(feature) ?? "");
+    else shape.attr("width", size - 2).attr("height", size - 2).attr("rx", 3);
+    shape
+      .attr("class", "state-shape")
       .attr("fill", face)
-      .attr(
-        "stroke",
-        filters.state === state.code
-          ? "#111827"
-          : "#929ba5",
-      )
-      .attr(
-        "stroke-width",
-        filters.state === state.code ? 3 : 1,
-      )
+      .attr("stroke", filters.state === state.code ? "#172a3a" : "#929ba5")
+      .attr("stroke-width", filters.state === state.code ? 2.4 : 1)
       .attr("stroke-dasharray", s.mean === null ? "3 2" : null);
+    if (path) {
+      if (path.area(feature) > 290) {
+        const [cx, cy] = path.centroid(feature);
+        tile.append("text")
+          .attr("class", "map-state-label")
+          .attr("x", cx).attr("y", cy)
+          .attr("text-anchor", "middle").attr("dominant-baseline", "central")
+          .attr("font-size", 11).attr("font-weight", 700)
+          .attr("fill", textColor).text(state.code);
+      }
+      continue;
+    }
     tile
       .append("text")
       .attr("x", (size - 3) / 2)
       .attr("y", size * 0.34)
       .attr("text-anchor", "middle")
       .attr("font-weight", 700)
-      .attr("font-size", 12)
+      .attr("font-size", Math.min(14, size * 0.32))
       .attr("fill", textColor)
       .text(state.code);
     tile
@@ -366,12 +433,12 @@ function drawMap() {
       .attr("x", (size - 3) / 2)
       .attr("y", size * 0.72)
       .attr("text-anchor", "middle")
-      .attr("font-size", 11)
+      .attr("font-size", Math.min(12, size * 0.28))
       .attr("fill", textColor)
       .text(fmt(s.mean, metric === "precip" ? 0 : 1) + (clipped ? "*" : ""));
   }
   $("color-key").innerHTML =
-    `<div class="color-gradient"></div><div class="color-labels"><span>≤ ${-lim}${unit()} · ${metric === "precip" ? "Drier" : "Cooler"}</span><span>0</span><span>≥ +${lim}${unit()} · ${metric === "precip" ? "Wetter" : "Warmer"}</span></div><p class="chart-note">Fixed map colors: −${lim} to +${lim}${unit()}. * Color capped; the number shows the uncapped mean. Hover for decimals.</p>`;
+    `<div class="color-gradient"></div><div class="color-labels"><span>≤ ${-lim}${unit()} · ${metric === "precip" ? "Drier" : "Cooler"}</span><span>0</span><span>≥ +${lim}${unit()} · ${metric === "precip" ? "Wetter" : "Warmer"}</span></div>`;
   ($("color-key").firstElementChild as HTMLElement).style.background =
     `linear-gradient(90deg,${d3
       .range(21)
@@ -381,8 +448,9 @@ function drawMap() {
 
 // The brush selects records; it never changes the underlying axis domains.
 function drawScatter() {
-  const { svg, width, height } = svgRoot("scatter", 300);
-  const m = { left: 58, right: 18, top: 12, bottom: 48 };
+  const { svg, width, height } = svgRoot("scatter");
+  const compact = height < 240;
+  const m = { left: compact ? 43 : 64, right: 14, top: compact ? 28 : 10, bottom: 42 };
   const x = d3
     .scaleLinear()
     .domain([-3, 3])
@@ -394,6 +462,7 @@ function drawScatter() {
   svg
     .append("g")
     .attr("class", "grid")
+    .attr("aria-hidden", "true")
     .attr("transform", `translate(${m.left},0)`)
     .call(
       d3
@@ -404,10 +473,12 @@ function drawScatter() {
     );
   svg
     .append("g")
+    .attr("class", "chart-axis")
     .attr("transform", `translate(0,${height - m.bottom})`)
     .call(d3.axisBottom(x).ticks(7));
   svg
     .append("g")
+    .attr("class", "chart-axis")
     .attr("transform", `translate(${m.left},0)`)
     .call(d3.axisLeft(y).ticks(5));
   svg
@@ -420,16 +491,17 @@ function drawScatter() {
   svg
     .append("text")
     .attr("class", "axis-title")
-    .attr("x", width / 2)
-    .attr("y", height - 7)
+    .attr("x", (m.left + width - m.right) / 2)
+    .attr("y", height - 5)
     .attr("text-anchor", "middle")
     .text("DJF ONI (°C)");
-  svg
-    .append("text")
+  const yTitle = svg.append("text")
     .attr("class", "axis-title")
-    .attr("transform", `translate(13,${height / 2}) rotate(-90)`)
-    .attr("text-anchor", "middle")
     .text(`${metricName()} anomaly (${unit()})`);
+  if (compact) yTitle.attr("x", m.left).attr("y", 16);
+  else yTitle
+    .attr("transform", `translate(15,${(m.top + height - m.bottom) / 2}) rotate(-90)`)
+    .attr("text-anchor", "middle");
   const selectedIds = new Set(focused.map((r) => r.id));
   const ordered = [...available].sort(
     (a, b) => Number(selectedIds.has(a.id)) - Number(selectedIds.has(b.id)),
@@ -518,20 +590,25 @@ function drawScatter() {
 
 // Context and selected IQRs use the same fixed phase/band rows.
 function drawComparison() {
-  const { svg, width } = svgRoot("comparison", 330);
+  const { svg, width, height } = svgRoot("comparison");
+  const axisY = height - 39;
+  const groupGap = 3;
+  const step = (axisY - 22 - groupGap * (bands.length - 1)) / comparisonRows.length;
+  const rowFont = Math.max(8, Math.min(13, step - 1));
   const x = d3
     .scaleLinear()
     .domain(domain(records, metric))
-    .range([152, width - 64]);
+    .range([158, width - 74]);
   svg
     .append("g")
-    .attr("transform", "translate(0,292)")
-    .call(d3.axisBottom(x).ticks(5));
+    .attr("class", "chart-axis")
+    .attr("transform", `translate(0,${axisY})`)
+    .call(d3.axisBottom(x).ticks(width < 400 ? 2 : 5));
   svg
     .append("text")
     .attr("class", "axis-title")
-    .attr("x", (152 + width - 64) / 2)
-    .attr("y", 326)
+    .attr("x", (158 + width - 74) / 2)
+    .attr("y", height - 4)
     .attr("text-anchor", "middle")
     .text(`${metricName()} anomaly (${unit()})`);
   svg
@@ -552,12 +629,10 @@ function drawComparison() {
     .attr("x1", x(0))
     .attr("x2", x(0))
     .attr("y1", 20)
-    .attr("y2", 290)
+    .attr("y2", axisY)
     .attr("stroke", "#b3bbc3");
-  for (let band = 3; band >= 0; band--)
-    for (let phaseIndex = 0; phaseIndex < 3; phaseIndex++) {
-      const phase = phases[phaseIndex],
-        y = 32 + (3 - band) * 67 + phaseIndex * 19;
+  comparisonRows.forEach(({ band, phase, phaseIndex }, index) => {
+      const y = 20 + (index + 0.5) * step + (bands.length - 1 - band) * groupGap;
       const base = available.filter(
           (r) => r.band === band && r.phase === phase,
         ),
@@ -601,24 +676,24 @@ function drawComparison() {
       row
         .append("rect")
         .attr("x", 2)
-        .attr("y", y - 9)
+        .attr("y", y - step / 2)
         .attr("width", width - 4)
-        .attr("height", 18)
+        .attr("height", step)
         .attr("rx", 3)
         .attr("fill", "transparent");
-      if (phaseIndex === 0)
+      if (index === 0 || comparisonRows[index - 1].band !== band)
         svg
           .append("text")
           .attr("x", 7)
-          .attr("y", y + 4)
-          .attr("font-size", 11)
+          .attr("y", y + rowFont * 0.34)
+          .attr("font-size", rowFont)
           .attr("font-weight", 700)
           .text(bands[band]);
       row
         .append("text")
         .attr("x", 73)
-        .attr("y", y + 4)
-        .attr("font-size", 11)
+        .attr("y", y + rowFont * 0.34)
+        .attr("font-size", rowFont)
         .attr("fill", base.length ? "#273747" : "#697684")
         .text(phase);
       if (context.mean !== null) {
@@ -658,11 +733,11 @@ function drawComparison() {
       row
         .append("text")
         .attr("x", width - 5)
-        .attr("y", y + 4)
+        .attr("y", y + rowFont * 0.34)
         .attr("text-anchor", "end")
-        .attr("font-size", 10)
+        .attr("font-size", rowFont)
         .text(s.n ? `${s.n} / ${s.winters}` : "—");
-    }
+  });
 }
 
 function drawLegends() {
@@ -702,7 +777,7 @@ function render() {
   focused = selectRecords(available, selection, metric);
   const s = summary(focused, metric);
   $("cohort").textContent =
-    `${s.n.toLocaleString()} records · ${s.winters} winters`;
+    `${s.n.toLocaleString()} records · ${s.winters} winter${s.winters === 1 ? "" : "s"}`;
   const label = !selection
     ? "All filtered observations"
     : selection.kind === "state"
@@ -717,14 +792,13 @@ function render() {
   $("selection-label").textContent =
     `${label} · ${available.length.toLocaleString()} available`;
   $("active-metric").textContent = `Viewing: ${metricName()} anomaly (${unit()})`;
-  $("active-filters").textContent = `${filters.state === "All" ? "All states" : stateNames.get(filters.state)} · ${filters.region === "All" ? "All regions" : filters.region} · ${filters.phase === "All" ? "All ENSO phases" : filters.phase} · winters ${filters.start}–${filters.end}`;
-  $("state-context").textContent = filters.state === "All" ? "State scope: all states" : `State scope: ${stateNames.get(filters.state)} (kept when selecting a range or group)`;
+  $("state-context").textContent = filters.state === "All" ? "State scope: all states" : `State scope: ${stateNames.get(filters.state)}`;
   $<HTMLButtonElement>("all-states").disabled = filters.state === "All";
   $("map-title").textContent = `State overview · ${metricName().toLowerCase()} (${unit()})`;
   $("comparison-title").textContent = `${metricName()} anomaly by ENSO magnitude (${unit()})`;
   $("comparison-mean").textContent = `Current cohort mean: ${fmt(s.mean)} ${unit()} · ${s.n.toLocaleString()} records · ${s.winters} distinct winters`;
   $("comparison-scope").textContent = `${filters.state === "All" ? "Across all available states" : stateNames.get(filters.state)} · ${label}. Dot = mean ${metricName().toLowerCase()} anomaly; line = middle 50% of records.`;
-  $("brush-scope").textContent = `Select within ${filters.state === "All" ? "all states" : stateNames.get(filters.state)} and the active filters. Drag the box, or enter exact bounds below (endpoints included).`;
+  $("brush-scope").textContent = `Select within ${filters.state === "All" ? "all states" : stateNames.get(filters.state)} and the active filters. Both endpoints are included.`;
   $("empty").hidden = focused.length > 0;
   $("scatter-title").textContent =
     `ENSO and winter ${metricName().toLowerCase()}`;
@@ -774,6 +848,11 @@ for (const id of ["start", "end", "region", "phase", "state", "metric"])
     recordPage = 0;
     render();
   });
+$("map-style").addEventListener("change", () => {
+  mapStyle = $<HTMLSelectElement>("map-style").value === "geographic" ? "geographic" : "tiles";
+  hideTip();
+  drawMap();
+});
 $("clear").addEventListener("click", () => choose(null));
 $("all-states").addEventListener("click", () => {
   filters.state = "All";
@@ -814,16 +893,18 @@ $("brush-form").addEventListener("submit", (event) => {
     x0 > x1 ||
     y0 > y1
   ) {
-    $("error").textContent =
+    $("bounds-error").textContent =
       "Enter finite range bounds with each minimum ≤ maximum.";
     return;
   }
-  $("error").textContent = "";
+  $("bounds-error").textContent = "";
+  $<HTMLDialogElement>("brush-details").close();
   choose({ kind: "brush", x0, x1, y0, y1 });
 });
 $("record-search").addEventListener("input", () => {
   recordPage = 0;
   drawRecords();
+  $("record-scroll").scrollTop = 0;
 });
 for (const id of ["record-scope", "record-sort"])
   $(id).addEventListener("change", () => {
@@ -833,10 +914,12 @@ for (const id of ["record-scope", "record-sort"])
 $("record-prev").addEventListener("click", () => {
   recordPage--;
   drawRecords();
+  $("record-scroll").scrollTop = 0;
 });
 $("record-next").addEventListener("click", () => {
   recordPage++;
   drawRecords();
+  $("record-scroll").scrollTop = 0;
 });
 $("check-matches").addEventListener("click", () => {
   for (const r of matchingRecords()) checkedRecords.add(r.id);

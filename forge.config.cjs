@@ -1,6 +1,9 @@
 module.exports = {
   packagerConfig: {
     asar: true,
+    ...(process.env.ENSO_ELECTRON_ZIP_DIR && {
+      electronZipDir: process.env.ENSO_ELECTRON_ZIP_DIR,
+    }),
     executableName: "enso-weather-explorer",
     ignore: [
       /^\/(src|tests|scripts|data-raw|docs|test-results|playwright-report|out)(\/|$)/,
