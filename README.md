@@ -2,6 +2,22 @@
 
 MiniProj2 interactive dashboard, version **0.1.5**. D3.js visualizations packaged with Electron. Includes NOAA data for 48 states and 44 winters (1982–2025). The installed app runs offline.
 
+## Open the hosted dashboard
+
+The web build uses the same data and linked D3 views as the desktop app, without installation. The installed app remains available for offline use.
+
+The prepared workflow builds and deploys the website whenever `main` changes, once Pages is enabled. Hosting is currently pending: GitHub rejected Pages for this private repository on the current account plan. Before enabling deployment, resolve the hosting restriction and select **Settings > Pages > Source > GitHub Actions**. The expected URL for this repository is `https://Back2016.github.io/IV-MINIPROJ2/`.
+
+To preview the web build locally:
+
+```sh
+npm ci
+npm run build
+npx vite preview
+```
+
+Open the local URL printed by Vite. Relative asset paths support the `/IV-MINIPROJ2/` project URL as well as Electron. Deployment configuration is in `.github/workflows/pages.yml`; it publishes only `dist/`.
+
 ## Download the published Mac release (v0.1.5)
 
 [Download ENSO Weather Explorer v0.1.5 for Apple Silicon](https://github.com/Back2016/IV-MINIPROJ2/releases/download/v0.1.5/ENSO.Weather.Explorer-0.1.5-arm64.dmg) · [Release notes and checksum](https://github.com/Back2016/IV-MINIPROJ2/releases/tag/v0.1.5)
