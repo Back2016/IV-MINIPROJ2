@@ -4,9 +4,9 @@ MiniProj2 interactive dashboard, version **0.1.5**. D3.js visualizations package
 
 ## Open the hosted dashboard
 
-The web build uses the same data and linked D3 views as the desktop app, without installation. The installed app remains available for offline use.
+[Launch ENSO Weather Explorer](https://back2016.github.io/IV-MINIPROJ2/) in a modern desktop browser, without installation. The web build uses the same data and linked D3 views as the desktop app, including the v0.1.5 desktop 2×2 grid. The installed app remains available for offline use.
 
-The prepared workflow builds and deploys the website whenever `main` changes, once Pages is enabled. Hosting is currently pending: GitHub rejected Pages for this private repository on the current account plan. Before enabling deployment, resolve the hosting restriction and select **Settings > Pages > Source > GitHub Actions**. The expected URL for this repository is `https://Back2016.github.io/IV-MINIPROJ2/`.
+GitHub Actions builds and deploys the website whenever `main` changes. This repository is public, including its source code, and **Settings > Pages > Source** is set to **GitHub Actions**.
 
 To preview the web build locally:
 
